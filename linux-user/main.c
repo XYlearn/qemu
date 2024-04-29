@@ -72,6 +72,10 @@ static const char *seed_optarg;
 unsigned long mmap_min_addr;
 uintptr_t guest_base;
 bool have_guest_base;
+int program_code_only = 0; // GREENHOUSE PATCH
+bool hackbind = false; // GREENHOUSE PATCH
+bool hackproc = false; // GREENHOUSE PATCH
+bool hacksysinfo = false; // GREENHOUSE PATCH
 
 /*
  * Used to implement backwards-compatibility for the `-strace`, and
@@ -119,6 +123,8 @@ static void usage(int exitcode);
 
 static const char *interp_prefix = CONFIG_QEMU_INTERP_PREFIX;
 const char *qemu_uname_release;
+char *qemu_execve_path;
+
 
 /* XXX: on x86 MAP_GROWSDOWN only works if ESP <= address + 32, so
    we allocate a bigger stack. Need a better solution, for example
@@ -338,6 +344,34 @@ static void handle_arg_guest_base(const char *arg)
     have_guest_base = true;
 }
 
+// GREENHOUSE PATCH
+static void handle_arg_execve(const char *arg)
+{
+    qemu_execve_path = strdup(arg);
+}
+
+static void handle_arg_hackbind(const char *arg)
+{
+    hackbind = true;
+}
+
+static void handle_arg_hackproc(const char *arg)
+{
+    hackproc = true;
+}
+
+static void handle_arg_hacksysinfo(const char *arg)
+{
+    hacksysinfo = true;
+}
+
+static void handle_arg_pconly(const char *arg)
+{
+    // fprintf(stderr, "[GreenHouseQEMU] handle_arg_pconly\n");
+    program_code_only = 1;
+}
+// GREENHOUSE PATCH END
+
 static void handle_arg_reserved_va(const char *arg)
 {
     char *p;
@@ -440,6 +474,16 @@ static const struct qemu_argument arg_table[] = {
      "uname",      "set qemu uname release string to 'uname'"},
     {"B",          "QEMU_GUEST_BASE",  true,  handle_arg_guest_base,
      "address",    "set guest_base address to 'address'"},
+    {"execve",     "QEMU_EXECVE",      true,   handle_arg_execve, // GREENHOUSE PATCH
+     "path",       "use interpreter at 'path' when a process calls execve()"},
+    {"pconly",     "QEMU_PCONLY",      false,   handle_arg_pconly, // GREENHOUSE PATCH
+     "",           "filter non-program code ranges when logging"},
+    {"hackbind",   "QEMU_HACKBIND",    false,   handle_arg_hackbind, // GREENHOUSE PATCH
+     "",           "use hack to get around ipv6 addrs and conflicting binds"},
+    {"hackproc",   "QEMU_HACKPROC",    false,   handle_arg_hackproc, // GREENHOUSE PATCH
+     "",           "use hack to get around needing to mount a writable /proc"},
+    {"hacksysinfo",   "QEMU_HACKSYSINFO",    false,   handle_arg_hacksysinfo, // GREENHOUSE PATCH
+     "",           "use hack to get around sysinfo reporting"},
     {"R",          "QEMU_RESERVED_VA", true,  handle_arg_reserved_va,
      "size",       "reserve 'size' bytes for guest virtual address space"},
     {"d",          "QEMU_LOG",         true,  handle_arg_log,
@@ -632,6 +676,7 @@ int main(int argc, char **argv, char **envp)
     int log_mask;
     unsigned long max_reserved_va;
     bool preserve_argv0;
+    char filter_buf[512]; //GREENHOUSE PATCH
 
     error_init(argv[0]);
     module_call_init(MODULE_INIT_TRACE);
@@ -864,6 +909,14 @@ int main(int argc, char **argv, char **envp)
     target_set_brk(info->brk);
     syscall_init();
     signal_init();
+    
+    // GREENHOUSE PATCH
+    if (program_code_only == 1) {
+        memset(filter_buf, 0, 512);
+        snprintf(filter_buf, 512, "0x%lx..0x%lx", (unsigned long)info->start_code, (unsigned long)info->end_code);
+        // fprintf(stderr, "[qemu] Setting filterbuf: %s\n", filter_buf);
+        qemu_set_dfilter_ranges(filter_buf, &error_fatal);
+    }
 
     /* Now that we've loaded the binary, GUEST_BASE is fixed.  Delay
        generating the prologue until now so that the prologue can take

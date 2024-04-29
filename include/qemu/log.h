@@ -1,6 +1,8 @@
 #ifndef QEMU_LOG_H
 #define QEMU_LOG_H
 
+#define LOG_MAP "/qemu_log_mapping"
+
 /* A small part of this API is split into its own header */
 #include "qemu/log-for-trace.h"
 #include "qemu/rcu.h"
@@ -12,7 +14,6 @@ typedef struct QemuLogFile {
 
 /* Private global variable, don't use */
 extern QemuLogFile *qemu_logfile;
-
 
 /* 
  * The new API:
@@ -153,6 +154,7 @@ void qemu_set_log_filename(const char *filename, Error **errp);
 void qemu_set_dfilter_ranges(const char *ranges, Error **errp);
 bool qemu_log_in_addr_range(uint64_t addr);
 int qemu_str_to_log_mask(const char *str);
+void qemu_set_code_addrs(uint64_t start_code, uint64_t end_code);
 
 /* Print a usage message listing all the valid logging categories
  * to the specified FILE*.

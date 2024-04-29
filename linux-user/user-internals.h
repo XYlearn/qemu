@@ -28,6 +28,11 @@ void init_task_state(TaskState *ts);
 void task_settid(TaskState *);
 void stop_all_tasks(void);
 extern const char *qemu_uname_release;
+extern char *qemu_execve_path; // GREENHOUSE_PATCH
+extern bool hackbind; // GREENHOUSE_PATCH
+extern bool hackproc; // GREENHOUSE_PATCH
+extern bool hacksysinfo; // GREENHOUSE_PATCH
+
 extern unsigned long mmap_min_addr;
 
 typedef struct IOCTLEntry IOCTLEntry;

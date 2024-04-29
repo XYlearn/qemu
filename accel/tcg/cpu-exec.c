@@ -201,6 +201,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, target_ulong pc,
     return tb;
 }
 
+// GREENHOUSE PATCH
 static inline void log_cpu_exec(target_ulong pc, CPUState *cpu,
                                 const TranslationBlock *tb)
 {
@@ -208,9 +209,9 @@ static inline void log_cpu_exec(target_ulong pc, CPUState *cpu,
         && qemu_log_in_addr_range(pc)) {
 
         qemu_log_mask(CPU_LOG_EXEC,
-                      "Trace %d: %p [" TARGET_FMT_lx
+                      "Trace %d PID %d: %p [" TARGET_FMT_lx
                       "/" TARGET_FMT_lx "/%08x/%08x] %s\n",
-                      cpu->cpu_index, tb->tc.ptr, tb->cs_base, pc,
+                      cpu->cpu_index, getpid(), tb->tc.ptr, tb->cs_base, pc,
                       tb->flags, tb->cflags, lookup_symbol(pc));
 
 #if defined(DEBUG_DISAS)

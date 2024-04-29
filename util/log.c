@@ -33,6 +33,7 @@ QemuLogFile *qemu_logfile;
 int qemu_loglevel;
 static int log_append = 0;
 static GArray *debug_regions;
+static int FD_OFFSET = 300;
 
 /* Return the number of characters emitted.  */
 int qemu_log(const char *fmt, ...)
@@ -64,10 +65,29 @@ static void __attribute__((__constructor__)) qemu_logfile_init(void)
 
 static void qemu_logfile_free(QemuLogFile *logfile)
 {
+    // FILE* mapfile;
+    // char line[32];
+    // char buf[4096] = {0};
+    // int pos = 0;
+    // int temp_fd;
     g_assert(logfile);
 
     if (logfile->fd != stderr) {
+        // mapfile = fopen(LOG_MAP, "w+");
+        // qemu_flockfile(mapfile);
+        // while(fgets(line,32,mapfile)) {
+        //     line[strcspn(line, "\r\n")] = 0;
+        //     temp_fd = atoi(line);
+        //     fprintf(stderr, "tempfd: %d, logfile_fd: %d\n", temp_fd, fileno(logfile->fd));
+        //     if (temp_fd != fileno(logfile->fd)) {
+        //         pos += sprintf(&buf[pos], "%s\n", line);
+        //     }
+        // }
+        // fprintf(stderr, "%s\n", buf);
+        // fprintf(mapfile, "%s", buf);
+        // fclose(mapfile);
         fclose(logfile->fd);
+        // qemu_funlockfile(mapfile);
     }
     g_free(logfile);
 }
@@ -79,6 +99,12 @@ void qemu_set_log(int log_flags)
 {
     bool need_to_open_file = false;
     QemuLogFile *logfile;
+    FILE *mapfile, *tmpfile;
+    // char line[64];
+    // char buf[4096] = {0};
+    // int pos = 0;
+    int tempfd, newfd;
+    // char* token;
 
     qemu_loglevel = log_flags;
 #ifdef CONFIG_TRACE_LOG
@@ -95,6 +121,8 @@ void qemu_set_log(int log_flags)
     if (qemu_loglevel && (!is_daemonized() || logfilename)) {
         need_to_open_file = true;
     }
+    // fprintf(stderr, "[qemu] qemu_set_log, need_to_open_file %d log_flags: %x\n", need_to_open_file, log_flags);
+
     QEMU_LOCK_GUARD(&qemu_logfile_mutex);
     if (qemu_logfile && !need_to_open_file) {
         logfile = qemu_logfile;
@@ -103,12 +131,27 @@ void qemu_set_log(int log_flags)
     } else if (!qemu_logfile && need_to_open_file) {
         logfile = g_new0(QemuLogFile, 1);
         if (logfilename) {
-            logfile->fd = fopen(logfilename, log_append ? "a" : "w");
+            mapfile = fopen(LOG_MAP, "a");
+            qemu_flockfile(mapfile);
+            tmpfile = fopen(logfilename, log_append ? "a" : "w");
+            tempfd = fileno(tmpfile);
+            newfd = tempfd + FD_OFFSET;
+            while (fcntl(newfd, F_GETFL) >= 0) {
+                newfd += 1;
+            }
+            dup2(tempfd, newfd);
+            fclose(tmpfile);
+            // logfile->fd = fopen(logfilename, log_append ? "a" : "w");
+            logfile->fd = fdopen(newfd, log_append ? "a" : "w");
+
             if (!logfile->fd) {
                 g_free(logfile);
                 perror(logfilename);
                 _exit(1);
             }
+            fprintf(mapfile, "%d:%d\n", getpid(), fileno(logfile->fd));
+            fclose(mapfile);
+            qemu_funlockfile(mapfile);
             /* In case we are a daemon redirect stderr to logfile */
             if (is_daemonized()) {
                 dup2(fileno(logfile->fd), STDERR_FILENO);
@@ -256,6 +299,7 @@ void qemu_set_dfilter_ranges(const char *filter_spec, Error **errp)
             g_assert_not_reached();
         }
         if (lob > upb) {
+            fprintf(stderr, "lod %lx upb %lx\n", (unsigned long)lob, (unsigned long)upb);
             error_setg(errp, "Invalid range");
             goto out;
         }

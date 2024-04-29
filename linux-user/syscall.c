@@ -140,9 +140,14 @@
 #include "fd-trans.h"
 #include "tcg/tcg.h"
 
+int used_ports[512] = {0}; /* GREENHOUSE FIRMFUCK PATCH */
+int ports_index = 0; /* GREENHOUSE FIRMFUCK PATCH */
+
 #ifndef CLONE_IO
 #define CLONE_IO                0x80000000      /* Clone io context */
 #endif
+
+// #define FIRMFUCK "firmfucked.log" /* GREENHOUSE FIRMFUCK PATCH */
 
 /* We can't directly call the host clone syscall, because this will
  * badly confuse libc (breaking mutexes, for example). So we must
@@ -554,6 +559,33 @@ const char *target_strerror(int err)
 
     return strerror(target_to_host_errno(err));
 }
+
+
+// GREENHOUSE PATCH
+static void parse_ghpath(const char* pathname, char* redirected_path) {
+    char* result;
+    char rpath[PATH_MAX+1];
+
+    memset(rpath, 0, PATH_MAX+1);
+    if (hackproc) {
+        result = realpath(pathname, rpath);
+        if (result == NULL) {
+            memset(rpath, 0, PATH_MAX+1);
+            snprintf(rpath, PATH_MAX, "%s", pathname);
+        }
+
+        if (strncmp(rpath, "/proc/", 6) == 0) {
+            snprintf(redirected_path, PATH_MAX, "/ghproc/%s", rpath+6);
+            return;
+        }
+        else if (strncmp(rpath, "/dev/", 5) == 0) {
+            snprintf(redirected_path, PATH_MAX, "/ghdev/%s", rpath+5);
+            return;
+        }
+    }
+    snprintf(redirected_path, PATH_MAX, "%s", pathname);
+}
+// END GREENHOUSE PATCH
 
 #define safe_syscall0(type, name) \
 static type safe_##name(void) \
@@ -2183,6 +2215,11 @@ static abi_long do_setsockopt(int sockfd, int level, int optname,
             }
             ret = get_errno(setsockopt(sockfd, level, optname,
                                        &val, sizeof(val)));
+            // GREENHOUSE PATCH
+            if (hackbind && ret != 0) {
+                 fprintf(stderr, "[qemu] Forcing setsockopt to return 0 even in failure cases [setsockopt(%d, %d, %d) = %d]\n", sockfd, level, optname, ret);
+                 ret = 0;
+             }
             break;
         case IPV6_PKTINFO:
         {
@@ -2376,6 +2413,9 @@ set_timeout:
 		    optlen = IFNAMSIZ - 1;
 		}
 		dev_ifname = lock_user(VERIFY_READ, optval_addr, optlen, 1);
+        /* GREENHOUSE PATCH */
+        fprintf(stderr, "[GreenHouseQEMU] BIND_DEVICE: %s\n", dev_ifname);
+        /* PATCH END */
 		if (!dev_ifname) {
 		    return -TARGET_EFAULT;
 		}
@@ -3138,6 +3178,13 @@ static abi_long do_socket(int domain, int type, int protocol)
         return -TARGET_EPROTONOSUPPORT;
     }
 
+    /* GREENHOUSE PATCH */
+    if (hackbind && domain == AF_INET6) {
+        // handle all ipv6 networking as ipv4
+        domain = AF_INET;
+    }
+
+
     if (domain == AF_PACKET ||
         (domain == AF_INET && type == SOCK_PACKET)) {
         protocol = tswap16(protocol);
@@ -3169,27 +3216,126 @@ static abi_long do_socket(int domain, int type, int protocol)
             }
         }
     }
+
+    /* GREENHOUSE PATCH */
+    // create_mark(FIRMFUCK, "socket\n")
     return ret;
 }
 
 /* do_bind() Must return target values and target errnos. */
+// static abi_long do_bind(int sockfd, abi_ulong target_addr,
+//                         socklen_t addrlen)
+// {
+//     void *addr;
+//     abi_long ret;
+
+//     if ((int)addrlen < 0) {
+//         return -TARGET_EINVAL;
+//     }
+
+//     addr = alloca(addrlen+1);
+
+//     ret = target_to_host_sockaddr(sockfd, addr, target_addr, addrlen);
+//     if (ret)
+//         return ret;
+
+//     return get_errno(bind(sockfd, addr, addrlen));
+// }
+
+/* GREENHOUSE PATCH */
 static abi_long do_bind(int sockfd, abi_ulong target_addr,
                         socklen_t addrlen)
 {
-    void *addr;
+    void *addr = 0;
+    char ip[INET6_ADDRSTRLEN+1] = "";
+    unsigned short port = 0, newport = 0;
+    unsigned short reuse = 0, retries = 0;
+    void* cust_addr = 0;
     abi_long ret;
-
     if ((int)addrlen < 0) {
         return -TARGET_EINVAL;
     }
 
     addr = alloca(addrlen+1);
-
     ret = target_to_host_sockaddr(sockfd, addr, target_addr, addrlen);
-    if (ret)
+    if (ret) 
         return ret;
 
-    return get_errno(bind(sockfd, addr, addrlen));
+    /* GREENHOUSE PATCH */
+    if (hackbind) {
+        if(((struct sockaddr*)addr)->sa_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in*)addr)->sin_addr, ip, sizeof(ip));
+            port = ntohs(((struct sockaddr_in*)addr)->sin_port);
+            fprintf(stderr, "[GreenHouseQEMU] IP: %s\n", ip);
+            fprintf(stderr, "[GreenHouseQEMU] PORT: %hu\n", port);
+        }
+        else if (((struct sockaddr*)addr)->sa_family == AF_INET6) {
+            cust_addr = alloca(sizeof(struct sockaddr_in));
+            /* GREENHOUSE PATCH */
+            // forces a ipv6 bind address to ipv4
+            port = ntohs(((struct sockaddr_in6*)addr)->sin6_port);
+            memset(((struct sockaddr_in*)cust_addr), 0, sizeof(struct sockaddr_in));
+
+            // ((struct sockaddr*)addr)->sa_family = AF_INET;
+            fprintf(stderr, "[qemu] Using custom bind, forcing ipv6 protocol to ipv4 on addr 0.0.0.0 port %d\n", port);
+            inet_pton(AF_INET, "0.0.0.0", &((struct sockaddr_in*)cust_addr)->sin_addr);
+            inet_ntop(AF_INET, &((struct sockaddr_in*)cust_addr)->sin_addr, ip, sizeof(ip));
+            ((struct sockaddr_in*)cust_addr)->sin_port = htons(port);
+            ((struct sockaddr_in*)cust_addr)->sin_family = AF_INET;
+            addr = cust_addr;
+            addrlen = sizeof(struct sockaddr_in);
+            fprintf(stderr, "[GreenHouseQEMU] IPV6: 0.0.0.0\n");
+            fprintf(stderr, "[GreenHouseQEMU] IPV6_PORT: %hu\n", (unsigned short)ntohs(((struct sockaddr_in*)addr)->sin_port));
+        }
+
+        /* GREENHOUSE PATCH */
+        newport = port;
+        retries = 0;
+        while (retries < 3) { // keep trying until we get a successful bind or exceed retries
+            // fprintf(stderr, "[qemu] Trying ip: %s on sockfd %d\n", ip, sockfd);
+    
+            // GREENHOUSE PATCH - create mark only if successful
+            ret = get_errno(bind(sockfd, addr, addrlen));
+            if (!ret) {
+                // create_mark(FIRMFUCK, "bind\n");  
+                fprintf(stderr, "[qemu] Successful Bind %d\n", (int)ret);
+                used_ports[ports_index] = newport;
+                ports_index = ports_index + 1;
+                return ret;
+            }
+            if (newport <= 0) {
+                if (((struct sockaddr*)addr)->sa_family == AF_INET6 || ((struct sockaddr*)addr)->sa_family == AF_INET) {
+                    fprintf(stderr, "[qemu] Forcing port %d to 80 and retrying...", newport);
+                    newport = 80;
+                }
+            }
+            else {
+                newport = newport + 1;
+                while(1) {
+                    reuse = 0;
+                    for (int i = 0; i < ports_index; i++) {
+                        if (newport == used_ports[i]) {
+                            newport = newport + 1;
+                            reuse = 1;
+                            break;
+                        }
+                    }
+                    if(reuse == 0) {
+                        break;
+                    }
+                }
+                fprintf(stderr, "[qemu] bind failed, retrying with port %d\n", newport);
+                retries = retries + 1;
+            }
+
+            ((struct sockaddr_in*)addr)->sin_port = htons(newport);
+        }
+    }
+    else {
+        ret = get_errno(bind(sockfd, addr, addrlen));
+    }
+
+    return ret;
 }
 
 /* do_connect() Must return target values and target errnos. */
@@ -3198,6 +3344,8 @@ static abi_long do_connect(int sockfd, abi_ulong target_addr,
 {
     void *addr;
     abi_long ret;
+    char ip[INET6_ADDRSTRLEN+1] = "";
+    unsigned short port = 0;
 
     if ((int)addrlen < 0) {
         return -TARGET_EINVAL;
@@ -3209,8 +3357,61 @@ static abi_long do_connect(int sockfd, abi_ulong target_addr,
     if (ret)
         return ret;
 
+    if(((struct sockaddr*)addr)->sa_family == AF_INET) {
+      inet_ntop(AF_INET, &((struct sockaddr_in*)addr)->sin_addr, ip, sizeof(ip));
+      port = ntohs(((struct sockaddr_in*)addr)->sin_port);
+      fprintf(stderr, "[GreenHouseQEMU] IP-CONNECT: %s\n", ip);
+      fprintf(stderr, "[GreenHouseQEMU] PORT-CONNECT: %hu\n", port);
+
+    }
+
     return get_errno(safe_connect(sockfd, addr, addrlen));
 }
+
+/* GREENHOUSE PATCH */
+/* helper function for NR_close, checks if fd is a qemu log descriptor */
+static bool is_qemu_logfile(abi_long fd) {
+    FILE* mapfile;
+    char line[64];
+    abi_long temp_fd;
+    char buf[4096] = {0};
+    int pos = 0;
+    int pid;
+    char* token;
+
+    bool is_logfile = false;
+
+    mapfile = fopen(LOG_MAP, "r");
+    if (mapfile == NULL) {
+        return false;
+    }
+    qemu_flockfile(mapfile);
+
+    while(fgets(line,64,mapfile)) {
+        line[strcspn(line, "\r\n")] = 0;
+        token = strtok(line, ":");
+        pid = atoi(token);
+        token = strtok(NULL, ":");
+        temp_fd = (abi_long)atoi(token);
+        // fprintf(stderr, "pid: %d tempfd: %d\n", pid, (int)temp_fd);
+        if (temp_fd == fd) {
+            is_logfile = true;
+        }
+        if (kill(pid, 0) >= 0) { // exists
+            pos += sprintf(&buf[pos], "%d:%d\n", pid, (int)temp_fd);
+            // fprintf(stderr, "--- buf ---\n");
+            // fprintf(stderr, "%s", buf);
+            // fprintf(stderr, "-----------\n");
+        }
+    }
+    fclose(mapfile);
+    mapfile = fopen(LOG_MAP, "w");
+    fprintf(mapfile, "%s", buf);
+    fclose(mapfile);
+    qemu_funlockfile(mapfile);
+    return is_logfile;
+}
+/* END GREENHOUSE PATCH */
 
 /* do_sendrecvmsg_locked() Must return target values and target errnos. */
 static abi_long do_sendrecvmsg_locked(int fd, struct target_msghdr *msgp,
@@ -4501,6 +4702,9 @@ static inline abi_ulong do_shmat(CPUArchState *cpu_env,
 
     shmlba = target_shmlba(cpu_env);
 
+    /* Fish: Always ignore the provided shmaddr */
+    shmaddr = 0;
+
     if (shmaddr & (shmlba - 1)) {
         if (shmflg & SHM_RND) {
             shmaddr &= ~(shmlba - 1);
@@ -4673,12 +4877,19 @@ static abi_long do_ipc(CPUArchState *cpu_env,
         switch (version) {
         default:
         {
+            // FISH
             abi_ulong raddr;
             raddr = do_shmat(cpu_env, first, ptr, second);
-            if (is_error(raddr))
+            if (is_error(raddr)) {
+                printf("[shmat] is_error\n");
                 return get_errno(raddr);
-            if (put_user_ual(raddr, third))
+            }
+            if (put_user_ual(raddr, third)) {
+                printf("[shmat] put_user_ual TARGET_EFAULT\n");
                 return -TARGET_EFAULT;
+            }
+            ret = raddr;
+            printf("[shmat] ret %d\n", (int)ret);
             break;
         }
         case 1:
@@ -4692,6 +4903,10 @@ static abi_long do_ipc(CPUArchState *cpu_env,
 
     case IPCOP_shmget:
 	/* IPC_* flag values are the same on all linux platforms */
+    if (second == 0) {
+        /* Fish: This patch makes running httpd directly possible */
+        second = 65536;
+    }
 	ret = get_errno(shmget(first, second, third));
 	break;
 
@@ -8007,6 +8222,13 @@ static int do_openat(void *cpu_env, int dirfd, const char *pathname, int flags, 
 #endif
         { NULL, NULL, NULL }
     };
+    // GREENHOUSE PATCH
+    char redirected_path[PATH_MAX+1];
+    int ret = 0;
+    memset(redirected_path, 0, sizeof(redirected_path));
+
+    parse_ghpath(pathname, redirected_path);
+    pathname = redirected_path;
 
     if (is_proc_myself(pathname, "exe")) {
         int execfd = qemu_getauxval(AT_EXECFD);
@@ -8137,6 +8359,177 @@ static int host_to_target_cpu_mask(const unsigned long *host_mask,
     return 0;
 }
 
+#define BINPRM_BUF_SIZE 128
+
+/* GREENHOUSE_PATCH */
+/* qemu_execve() Must return target values and target errnos. */
+static abi_long qemu_execve(char *filename, char *argv[],
+                  char *envp[])
+{
+    char *i_arg = NULL, *i_name = NULL;
+    char **new_argp;
+    int argc, fd, ret, i, offset = 3;
+    int tokCount = 0;
+    int trace_count = 0;
+    char *cp;
+    char *token;
+    char *qemu_path_tokens;
+    char *qemu_path;
+    char buf[BINPRM_BUF_SIZE];
+    char tBuf[100];
+
+    fprintf(stderr, "[qemu] doing qemu_execven on filename %s\n", filename);
+    memset(buf, 0, BINPRM_BUF_SIZE);
+
+
+    for (argc = 0; argv[argc] != NULL; argc++) {
+        /* nothing */ ;
+        // fprintf(stderr, "   - arg %s\n", argv[argc]);
+    }
+
+    fd = open(filename, O_RDONLY);
+    if (fd == -1) {
+        // fprintf(stderr, "   - ERR1 %d\n", -ENOENT);
+        return -ENOENT;
+    }
+
+    ret = read(fd, buf, BINPRM_BUF_SIZE);
+    if (ret == -1) {
+        close(fd);
+        // fprintf(stderr, "   - ERR2 %d\n", -ENOENT);
+        return -ENOENT;
+    }
+
+    close(fd);
+
+    /* adapted from the kernel
+     * https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/fs/binfmt_script.c
+     */
+    if ((buf[0] == '#') && (buf[1] == '!')) {
+        /*
+         * This section does the #! interpretation.
+         * Sorta complicated, but hopefully it will work.  -TYT
+         */
+
+        buf[BINPRM_BUF_SIZE - 1] = '\0';
+        cp = strchr(buf, '\n');
+        if (cp == NULL) {
+            cp = buf+BINPRM_BUF_SIZE-1;
+        }
+        *cp = '\0';
+        while (cp > buf) {
+            cp--;
+            if ((*cp == ' ') || (*cp == '\t')) {
+                *cp = '\0';
+            } else {
+                break;
+            }
+        }
+        for (cp = buf+2; (*cp == ' ') || (*cp == '\t'); cp++) {
+            /* nothing */ ;
+        }
+        if (*cp == '\0') {
+            return -ENOEXEC; /* No interpreter name found */
+        }
+        i_name = cp;
+        i_arg = NULL;
+        for ( ; *cp && (*cp != ' ') && (*cp != '\t'); cp++) {
+            /* nothing */ ;
+        }
+        while ((*cp == ' ') || (*cp == '\t')) {
+            *cp++ = '\0';
+        }
+        if (*cp) {
+            i_arg = cp;
+        }
+
+        if (i_arg) {
+            offset = 5;
+        } else {
+            offset = 4;
+        }
+    }
+
+    qemu_path_tokens = strdup(qemu_execve_path);
+    token = strtok(qemu_path_tokens, " ");
+    qemu_path = strdup(token);
+    token = strtok(NULL, " ");
+    while (token != NULL) {
+        token = strtok(NULL, " ");
+        tokCount += 1;
+    }
+    offset += 2 + tokCount;
+
+    // fprintf(stderr, "offset %d argc %d tokCount %d\n", offset, argc, tokCount);
+    // fprintf(stderr, "Original args\n");
+    new_argp = alloca((argc + offset + 1) * sizeof(void *));
+    /* Copy the original arguments with offset */
+    for (i = 0; i < argc; i++) {
+        // fprintf(stderr, "   - argv %s\n", argv[i]);
+        new_argp[i + offset] = strdup(argv[i]);
+    }
+
+    new_argp[0] = strdup(qemu_path);
+    new_argp[1] = strdup("-0");
+
+    if (i_name) {
+        new_argp[2] = i_name;
+        offset -= 1; // iname is 2nd and 2nd last arg
+
+    } else {
+        new_argp[2] = argv[0];
+    }
+
+
+    qemu_path_tokens = strdup(qemu_execve_path);
+    token = strtok(qemu_path_tokens, " ");
+    while (tokCount > 0 && token != NULL) {
+        token = strtok(NULL, " ");
+        if(strstr(token, "trace.log") != NULL) {
+            do {
+            trace_count += 1;
+            memset(tBuf, 0, 100);
+            snprintf(tBuf, 90, "%s%d", token, trace_count);
+            } while( access( tBuf, F_OK ) == 0 );
+            new_argp[offset - 2 - tokCount] = strdup(tBuf);
+        }
+        else {
+            new_argp[offset - 2 - tokCount] = strdup(token);
+        }
+        tokCount -= 1;
+    }
+
+    new_argp[offset - 2] = strdup("-execve");
+    new_argp[offset - 1] = strdup(qemu_execve_path);
+
+    if (i_name) {
+        offset += 1; // iname is 2nd and 2nd last arg
+        new_argp[offset - 1] = i_name;
+
+        if (i_arg) {
+            new_argp[offset - 2] = i_name;
+            new_argp[offset - 1] = i_arg;
+        }
+    }
+
+    new_argp[offset] = filename;
+    new_argp[argc + offset] = NULL;
+
+    // fprintf(stderr, "[qemu] qemu_execve_path %s new_arg\n", qemu_execve_path);
+    // for (argc = 0; new_argp[argc] != NULL; argc++) {
+    //     fprintf(stderr, "   - arg %s\n", new_argp[argc]);
+    // }
+
+    // fprintf(stderr, "   - [envp] \n");
+    // for (argc = 0; envp[argc] != NULL; argc++) {
+    //     fprintf(stderr, "   - envp %s\n", envp[argc]);
+    // }
+
+
+    return get_errno(execve(qemu_path, new_argp, envp));
+}
+/* END GREENHOUSE_PATCH */
+
 #if defined(TARGET_NR_pivot_root) && defined(__NR_pivot_root)
 _syscall2(int, pivot_root, const char *, new_root, const char *, put_old)
 #endif
@@ -8164,6 +8557,10 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
     struct statfs stfs;
 #endif
     void *p;
+    // GREENHOUSE PATCH
+    char redirected_path[PATH_MAX+1];
+    memset(redirected_path, 0, sizeof(redirected_path));
+    // GREENHOUSE PATCH END
 
     switch(num) {
     case TARGET_NR_exit:
@@ -8272,6 +8669,17 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         return ret;
 #endif
     case TARGET_NR_close:
+        // if (arg1 >= 3 && arg1 <= 5) {
+        //   printf("not closing fd %d\n", (int)arg1);
+        //   return 0;
+        // }
+        // GREENHOUSE PATCH: disable closing for select files
+        // fprintf(stderr, "[qemu] closing %d\n", (int)arg1);
+        if (is_qemu_logfile(arg1)) {
+            fprintf(stderr, "[qemu] not closing %d\n", (int)arg1);
+            return -1;
+        }
+
         fd_trans_unregister(arg1);
         return get_errno(close(arg1));
 
@@ -8430,7 +8838,13 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
              * before the execve completes and makes it the other
              * program's problem.
              */
-            ret = get_errno(safe_execve(p, argp, envp));
+            // ret = get_errno(safe_execve(p, argp, envp)); //GREENHOUSE_PATCH
+            if (qemu_execve_path && *qemu_execve_path) {       //GREENHOUSE_PATCH
+                ret = get_errno(qemu_execve(p, argp, envp));   //GREENHOUSE_PATCH
+            } else {                                           //GREENHOUSE_PATCH
+                ret = get_errno(safe_execve(p, argp, envp));   //GREENHOUSE_PATCH
+            }   
+            
             unlock_user(p, arg1, 0);
 
             goto execve_end;
@@ -8672,6 +9086,8 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         if (!(p = lock_user_string(arg1))) {
             return -TARGET_EFAULT;
         }
+        parse_ghpath(p, redirected_path);
+        p = redirected_path;
         ret = get_errno(access(path(p), arg2));
         unlock_user(p, arg1, 0);
         return ret;
@@ -8681,6 +9097,8 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         if (!(p = lock_user_string(arg2))) {
             return -TARGET_EFAULT;
         }
+        parse_ghpath(p, redirected_path);
+        p = redirected_path;
         ret = get_errno(faccessat(arg1, p, arg3, 0));
         unlock_user(p, arg2, 0);
         return ret;
@@ -9769,7 +10187,11 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
 #endif
 #ifdef TARGET_NR_listen
     case TARGET_NR_listen:
-        return get_errno(listen(arg1, arg2));
+        ret = get_errno(listen(arg1, arg2));
+        // if (ret == 0) {
+        //   create_mark(FIRMFUCK, "listen\n");
+        // }
+        return ret;
 #endif
 #ifdef TARGET_NR_recv
     case TARGET_NR_recv:
@@ -9910,6 +10332,8 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         if (!(p = lock_user_string(arg1))) {
             return -TARGET_EFAULT;
         }
+        parse_ghpath(p, redirected_path);
+        p = redirected_path;
         ret = get_errno(stat(path(p), &st));
         unlock_user(p, arg1, 0);
         goto do_stat;
@@ -9919,6 +10343,8 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         if (!(p = lock_user_string(arg1))) {
             return -TARGET_EFAULT;
         }
+        parse_ghpath(p, redirected_path);
+        p = redirected_path;
         ret = get_errno(lstat(path(p), &st));
         unlock_user(p, arg1, 0);
         goto do_stat;
@@ -10016,9 +10442,18 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
                 if (!lock_user_struct(VERIFY_WRITE, target_value, arg1, 0))
                     return -TARGET_EFAULT;
                 __put_user(value.uptime, &target_value->uptime);
-                __put_user(value.loads[0], &target_value->loads[0]);
-                __put_user(value.loads[1], &target_value->loads[1]);
-                __put_user(value.loads[2], &target_value->loads[2]);
+                // GREENHOUSE PATCH
+                if (hacksysinfo) {
+                    __put_user(0, &target_value->loads[0]);
+                    __put_user(0, &target_value->loads[1]);
+                    __put_user(0, &target_value->loads[2]);
+                }
+                else {
+                    __put_user(value.loads[0], &target_value->loads[0]);
+                    __put_user(value.loads[1], &target_value->loads[1]);
+                    __put_user(value.loads[2], &target_value->loads[2]);
+                }
+                // END GREENHOUSE PATCH
                 __put_user(value.totalram, &target_value->totalram);
                 __put_user(value.freeram, &target_value->freeram);
                 __put_user(value.sharedram, &target_value->sharedram);
