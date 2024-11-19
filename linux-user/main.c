@@ -76,6 +76,7 @@ int program_code_only = 0; // GREENHOUSE PATCH
 bool hackbind = false; // GREENHOUSE PATCH
 bool hackproc = false; // GREENHOUSE PATCH
 bool hacksysinfo = false; // GREENHOUSE PATCH
+bool hackhouse = false; // HOUSEFUZZ PATCH
 
 /*
  * Used to implement backwards-compatibility for the `-strace`, and
@@ -365,6 +366,11 @@ static void handle_arg_hacksysinfo(const char *arg)
     hacksysinfo = true;
 }
 
+static void handle_arg_hackhouse(const char *arg)
+{
+    hacksysinfo = true;
+}
+
 static void handle_arg_pconly(const char *arg)
 {
     // fprintf(stderr, "[GreenHouseQEMU] handle_arg_pconly\n");
@@ -484,6 +490,8 @@ static const struct qemu_argument arg_table[] = {
      "",           "use hack to get around needing to mount a writable /proc"},
     {"hacksysinfo",   "QEMU_HACKSYSINFO",    false,   handle_arg_hacksysinfo, // GREENHOUSE PATCH
      "",           "use hack to get around sysinfo reporting"},
+    {"hackhouse",   "QEMU_HACKHOUSE",    false,   handle_arg_hackhouse, // HOUSEFUZZ PATCH
+     "",           "use hack of housefuzz"},
     {"R",          "QEMU_RESERVED_VA", true,  handle_arg_reserved_va,
      "size",       "reserve 'size' bytes for guest virtual address space"},
     {"d",          "QEMU_LOG",         true,  handle_arg_log,
@@ -748,7 +756,8 @@ int main(int argc, char **argv, char **envp)
     /*
      * get binfmt_misc flags
      */
-    preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0);
+    // preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0);
+    preserve_argv0 = 0; // HOUSEFUZZ PATCH
 
     /*
      * Manage binfmt-misc preserve-arg[0] flag
