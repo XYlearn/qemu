@@ -143,7 +143,6 @@
 
 int used_ports[512] = {0}; /* GREENHOUSE FIRMFUCK PATCH */
 int ports_index = 0; /* GREENHOUSE FIRMFUCK PATCH */
-int thread_compat = 0; /* HOUSEFUZZ PATCH */
 
 #ifndef CLONE_IO
 #define CLONE_IO                0x80000000      /* Clone io context */
@@ -569,14 +568,14 @@ const char *target_strerror(int err)
 // GREENHOUSE PATCH
 static void parse_ghpath(const char* pathname, char* redirected_path) {
     char* result;
-    char rpath[PATH_MAX+1];
+    char rpath[PATH_MAX - 2];
 
-    memset(rpath, 0, PATH_MAX+1);
+    memset(rpath, 0, PATH_MAX - 2);
     if (hackproc) {
         result = realpath(pathname, rpath);
         if (result == NULL) {
-            memset(rpath, 0, PATH_MAX+1);
-            snprintf(rpath, PATH_MAX, "%s", pathname);
+            memset(rpath, 0, PATH_MAX - 2);
+            snprintf(rpath, PATH_MAX - 3, "%s", pathname);
         }
 
         if (strncmp(rpath, "/proc/", 6) == 0) {
@@ -3375,51 +3374,6 @@ static abi_long do_connect(int sockfd, abi_ulong target_addr,
     return get_errno(safe_connect(sockfd, addr, addrlen));
 }
 
-/* GREENHOUSE PATCH */
-/* helper function for NR_close, checks if fd is a qemu log descriptor */
-static bool is_qemu_logfile(abi_long fd) {
-    FILE* mapfile;
-    char line[64];
-    abi_long temp_fd;
-    char buf[4096] = {0};
-    int pos = 0;
-    int pid;
-    char* token;
-
-    bool is_logfile = false;
-
-    mapfile = fopen(LOG_MAP, "r");
-    if (mapfile == NULL) {
-        return false;
-    }
-    qemu_flockfile(mapfile);
-
-    while(fgets(line,64,mapfile)) {
-        line[strcspn(line, "\r\n")] = 0;
-        token = strtok(line, ":");
-        pid = atoi(token);
-        token = strtok(NULL, ":");
-        temp_fd = (abi_long)atoi(token);
-        // fprintf(stderr, "pid: %d tempfd: %d\n", pid, (int)temp_fd);
-        if (temp_fd == fd) {
-            is_logfile = true;
-        }
-        if (kill(pid, 0) >= 0) { // exists
-            pos += sprintf(&buf[pos], "%d:%d\n", pid, (int)temp_fd);
-            // fprintf(stderr, "--- buf ---\n");
-            // fprintf(stderr, "%s", buf);
-            // fprintf(stderr, "-----------\n");
-        }
-    }
-    fclose(mapfile);
-    mapfile = fopen(LOG_MAP, "w");
-    fprintf(mapfile, "%s", buf);
-    fclose(mapfile);
-    qemu_funlockfile(mapfile);
-    return is_logfile;
-}
-/* END GREENHOUSE PATCH */
-
 /* do_sendrecvmsg_locked() Must return target values and target errnos. */
 static abi_long do_sendrecvmsg_locked(int fd, struct target_msghdr *msgp,
                                       int flags, int send)
@@ -4916,10 +4870,11 @@ static abi_long do_ipc(CPUArchState *cpu_env,
 
     case IPCOP_shmget:
 	/* IPC_* flag values are the same on all linux platforms */
-    if (second == 0) {
-        /* Fish: This patch makes running httpd directly possible */
-        second = 65536;
-    }
+    /* HouseFuzz: this patch should be disabled for init emulation */
+    // if (second == 0) {
+    //     /* Fish: This patch makes running httpd directly possible */
+    //     second = 65536;
+    // }
 	ret = get_errno(shmget(first, second, third));
 	break;
 
@@ -6603,15 +6558,6 @@ static int do_fork(CPUArchState *env, unsigned int flags, abi_ulong newsp,
         new_thread_info info;
         pthread_attr_t attr;
 
-        // HOUSEFUZZ PATCH. Some old libpthread does not use
-        // CLONE_THREAD(<2.4.0) and CLONE_SYSVSEM(<2.5.10).
-        // We just add them to avoid the issue.
-        if ((flags & CLONE_THREAD_FLAGS_COMPAT) != CLONE_THREAD_FLAGS) {
-            flags |= CLONE_THREAD | CLONE_SYSVSEM;
-            // flags |= CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID;
-            thread_compat = 1;
-        }
-
         if (((flags & CLONE_THREAD_FLAGS) != CLONE_THREAD_FLAGS) ||
             (flags & CLONE_INVALID_THREAD_FLAGS)) {
             return -TARGET_EINVAL;
@@ -8254,7 +8200,6 @@ static int do_openat(void *cpu_env, int dirfd, const char *pathname, int flags, 
     };
     // GREENHOUSE PATCH
     char redirected_path[PATH_MAX+1];
-    int ret = 0;
     memset(redirected_path, 0, sizeof(redirected_path));
 
     parse_ghpath(pathname, redirected_path);
